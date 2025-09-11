@@ -1,0 +1,16 @@
+$gitignore = @"
+.idea/
+.vscode/
+target/
+node_modules/
+.DS_Store
+dist/
+build/
+*.log
+.env
+ops/compose/.env.local
+backend/.env
+.classpath
+.project
+.settings/
+"@
