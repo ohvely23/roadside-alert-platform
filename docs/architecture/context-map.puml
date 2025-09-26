@@ -1,0 +1,67 @@
+@startuml RAP-上下文图
+title 车路协同数据采集与事件告警平台（RAP）— 上下文关系与数据流
+
+skinparam DefaultFontName "Microsoft YaHei"
+skinparam rectangle {
+BackgroundColor #F8FBFF
+BorderColor #265D9B
+}
+skinparam ArrowColor #2E5AAC
+
+left to right direction
+
+rectangle "Identity\n（认证/授权/审计）" as ID
+rectangle "Device\n（注册/激活/心跳/健康）" as DEV
+rectangle "Ingestion\n（接入/标准化/质量/幂等）" as ING
+rectangle "Rule/Alert\n（规则评估/合并/通知）" as RA
+rectangle "Ticket\n（工单闭环）" as TKT
+rectangle "Analytics\n（聚合/报表/KPI）" as ANA
+
+rectangle "第三方应用\n（REST/Webhook/MQ）" as EXT
+rectangle "Web 控制台\n（WS/REST）" as WEB
+
+' 主数据流与交互
+WEB --> ID : 登录/用户管理\nJWT
+ID --> WEB : 鉴权/令牌
+
+WEB --> DEV : 设备注册/激活\n配置管理
+DEV --> WEB : 在线状态/健康
+
+DEV --> ING : 设备上报事件\nHTTP/MQTT/Kafka/V2X
+ING --> DEV : 签名/时间窗/nonce 校验反馈
+
+ING --> RA : 标准化 Event 流\n（持久化+消息）
+' 可选回写
+RA --> ING : 质量/拒收原因（可选）
+
+RA --> TKT : 告警触发建单（自动/手动）
+TKT --> WEB : 工单状态/日志
+
+RA --> WEB : 告警推送（WebSocket）\n订阅管理
+RA --> EXT : Webhook 通知（重试≤3）
+
+ANA --> WEB : 报表/KPI
+ING --> ANA : 事件订阅
+RA --> ANA : 告警订阅
+TKT --> ANA : 工单订阅
+DEV --> ANA : 在线率/健康（可选）
+
+' 审计与横切
+ID --> RA : 审计事件
+ID --> TKT : 审计事件
+ID --> ING : 审计事件
+
+legend right
+每个上下文的输入/输出
+
+Identity：输入=登录/管理；输出=JWT/审计
+Device：输入=注册/激活/心跳；输出=设备状态/健康
+Ingestion：输入=上报事件；输出=标准化 Event、拒收原因（可选）
+Rule/Alert：输入=Event 流/上下文；输出=Alert、通知、建单指令
+Ticket：输入=建单/人工操作；输出=Ticket 状态/日志
+Analytics：输入=Event/Alert/Ticket/Device 指标；输出=聚合/KPI
+订阅关系
+Analytics 订阅 Event、Alert、Ticket（以及 Device 健康可选）
+主链路：Event → Alert → Ticket
+end legend
+@enduml

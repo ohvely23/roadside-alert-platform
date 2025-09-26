@@ -1,22 +1,114 @@
 version: "3.9"
 
+name: roadside-alert-platform
+
 services:
   postgres:
-    image: postgres:14
+    image: postgres:${POSTGRES_VERSION:-14.12}
+    container_name: rap-postgres
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: your_user
-      POSTGRES_PASSWORD: your_password
-      POSTGRES_DB: your_db
+      POSTGRES_USER: ${POSTGRES_USER:-rap}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rap}
+      POSTGRES_DB: ${POSTGRES_DB:-rap}
+      TZ: UTC
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # 如果有初始化脚本，可挂载：
+      # - ./initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rap} -d ${POSTGRES_DB:-rap}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rap-net
 
   rabbitmq:
-    image: rabbitmq:3.13-management
+    image: rabbitmq:${RABBITMQ_VERSION:-3.13.3-management}
+    container_name: rap-rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:-guest}
+      TZ: UTC
     ports:
-      - "5672:5672"
-      - "15672:15672"
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "${RABBITMQ_MGMT_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - rap-net
+
+  # 预留后端服务（W3 引入可替换为 build 方式）
+  app-backend:
+    image: ghcr.io/ohvely23/roadside-alert-backend:0.1.0
+    container_name: rap-backend
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB:-rap}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-rap}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-rap}
+      SPRING_JPA_HIBERNATE_DDL_AUTO: validate
+      SPRING_RABBITMQ_HOST: rabbitmq
+      SPRING_RABBITMQ_PORT: 5672
+      MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: health,info,prometheus
+      MANAGEMENT_METRICS_TAGS_APPLICATION: roadside-alert-platform
+      TZ: UTC
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - rap-net
+
+  prometheus:
+    image: prom/prometheus:${PROMETHEUS_VERSION:-v2.54.1}
+    container_name: rap-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ${PROMETHEUS_CONFIG:-./prometheus.yml}:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    depends_on:
+      - app-backend
+    networks:
+      - rap-net
+
+  grafana:
+    image: grafana/grafana:${GRAFANA_VERSION:-10.4.5}
+    container_name: rap-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      TZ: UTC
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # 如需预置数据源与仪表盘：
+      # - ./grafana:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    networks:
+      - rap-net
+
+networks:
+  rap-net:
+    driver: bridge
 
 volumes:
   pgdata:
+  grafana-data:

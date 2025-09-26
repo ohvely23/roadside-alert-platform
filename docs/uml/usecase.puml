@@ -1,0 +1,68 @@
+@startuml RAP-UseCases-NO-RBAC
+title 车路协同数据采集与事件告警平台 - 用例图（无 RBAC 版）
+
+skinparam defaultFontName Microsoft YaHei
+skinparam usecase {
+  BorderColor #2E5AAC
+  BackgroundColor #EEF6FF
+  ArrowColor #2E5AAC
+}
+left to right direction
+
+actor 管理员 as admin
+actor 运维工程师 as ops
+actor 调度员 as dispatcher
+actor 数据分析员 as analyst
+actor "第三方应用（集成方）" as app
+actor 设备 as device
+
+rectangle "RAP 平台（无 RBAC）" as RAP {
+  usecase "用户与账号管理\n（按用户类型：ADMIN/OPS/\nDISPATCHER/ANALYST/APP）" as UC_Account
+
+  usecase "系统与密钥配置\n（设备密钥/Webhook 密钥）" as UC_Config
+  usecase "设备注册与管理\n（摄像头/雷达/RSU）" as UC_Device
+  usecase "通道健康监测\n（在线率/心跳）" as UC_Health
+
+  usecase "数据接入与标准化\n（HTTP+JSON）" as UC_Ingest
+  usecase "事件检测\n（规则）" as UC_Rule
+  usecase "告警发布\n（Web/短信/邮件/Webhook）" as UC_Notify
+  usecase "告警确认与关闭\n（备注/标签）" as UC_AlertOps
+  usecase "事件检索与回放" as UC_Replay
+  usecase "报表与 KPI 统计" as UC_Stats
+  usecase "审计日志" as UC_Audit
+  usecase "工单流转\n（指派→处理→关闭）" as UC_Ticket
+
+  ' 选做/不纳入本次实训范围的能力（置灰显示）
+  usecase "多协议接入\n（MQTT/Kafka/V2X）\n<<选做>>" as UC_Multi #DDDDDD
+  usecase "开放接口订阅\n（REST/WS/MQ/Webhook）\n<<选做>>" as UC_Sub #DDDDDD
+}
+
+' 参与关系
+admin --> UC_Account
+admin --> UC_Config
+admin --> UC_Device
+admin --> UC_Audit
+ops --> UC_Device
+ops --> UC_Health
+ops --> UC_Rule
+ops --> UC_AlertOps
+ops --> UC_Ticket
+dispatcher --> UC_AlertOps
+dispatcher --> UC_Ticket
+analyst --> UC_Replay
+analyst --> UC_Stats
+app --> UC_Notify : 通过 Webhook 接收
+device --> UC_Ingest : 上报事件/心跳
+
+' 说明：平台内部用例之间的概念关联（虚线）
+UC_Ingest ..> UC_Rule : 标准化数据进入规则评估
+UC_Rule ..> UC_Notify : 触发告警后通知
+UC_AlertOps ..> UC_Ticket : 可选自动/手动建单
+UC_Ticket ..> UC_Stats : 处置时效统计
+UC_Audit .. UC_Account
+UC_Audit .. UC_Device
+UC_Audit .. UC_Rule
+UC_Audit .. UC_AlertOps
+UC_Audit .. UC_Ticket
+
+@enduml

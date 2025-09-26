@@ -1,0 +1,85 @@
+@startuml RAP-Modules-NO-RBAC
+title 车路协同数据采集与事件告警平台 - 模块视图（无 RBAC 版）
+
+skinparam defaultFontName Microsoft YaHei
+skinparam packageStyle rectangle
+skinparam component {
+  BackgroundColor #F7FAFF
+  BorderColor #2E5AAC
+}
+
+left to right direction
+
+package "接口层" {
+  component "Web 控制台\n(React/AntD)" as Web
+  component "API 网关\n(Spring MVC)" as APIGW
+  component "WebSocket 服务\n(页面告警推送，可选)" as WSS
+}
+
+package "运维与安全" {
+  component "身份与登录\n(SystemUser + UserType)" as Auth
+  component "审计日志服务" as Audit
+  component "健康检查与指标\n(Actuator/Prometheus/Loki)" as Obs
+}
+
+package "接入与标准化" {
+  component "签名与幂等过滤器" as Filter
+  component "标准化与质量评分\n（简化）" as Normalize
+}
+
+package "处理层（规则与告警）" {
+  component "规则引擎" as Rule
+  component "事件去重与合并\n（基于 dedup_hash/窗口）" as Dedup
+  component "告警服务\n（去抖/合并）" as Alert
+}
+
+package "通知与集成" {
+  component "通知服务\n（Web/Email/SMS/Webhook）" as Notify
+  component "Webhook 分发器" as Webhook
+}
+
+package "工单与统计" {
+  component "工单服务\n（指派/处理/关闭）" as Ticket
+  component "统计聚合\n（批/即席）" as Stats
+}
+
+package "存储与附件" {
+  component "PostgreSQL\n（事件/设备/系统用户/告警/工单/统计/审计）" as PG
+  component "对象存储（可选）\n（事件附件）" as OSS
+}
+
+' 依赖关系（主要链路）
+Web --> APIGW
+WSS <-- Notify : 页面推送
+
+APIGW --> Auth
+APIGW --> Filter
+Filter --> Normalize
+Normalize --> PG : 写入 event / heartbeat
+Normalize --> Rule
+Rule --> Dedup
+Dedup --> Alert
+Alert --> PG : 写入/更新 alert
+
+Alert --> Notify
+Notify --> Webhook
+Notify --> PG : 写入 notification
+
+APIGW --> Ticket
+Ticket --> PG : 写 ticket/ticket_log
+Stats --> PG
+Audit --> PG
+
+' 控制台访问后台
+Web --> APIGW
+Web --> WSS
+
+' 可观测与健康
+Obs .. APIGW
+Obs .. Rule
+Obs .. Notify
+
+' 附件
+Normalize .. OSS : 事件附件(可选)
+
+@enduml

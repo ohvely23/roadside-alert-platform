@@ -1,0 +1,584 @@
+@startuml RAP-ER
+title 路侧事件告警平台（RAP）— 数据库模型结构图（ER）
+
+left to right direction
+skinparam DefaultFontName Microsoft YaHei
+skinparam entity {
+  BackgroundColor #F8FBFF
+  BorderColor #265D9B
+}
+skinparam packageStyle rectangle
+
+' ========== 多租户与身份（RBAC） ==========
+package "多租户与身份（RBAC）" {
+  entity tenant {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    name: varchar(128) [UNIQUE]
+    status: varchar(32) {'ACTIVE','SUSPENDED'}
+    created_at: timestamptz
+  }
+
+  entity user_account {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    username: varchar(64)
+    password_hash: varchar(255)
+    email: varchar(128)
+    phone: varchar(32)
+    status: varchar(32) {'ACTIVE','LOCKED','DISABLED'}
+    created_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, username)
+  }
+
+  entity role {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    code: varchar(64)
+    name: varchar(128)
+    created_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, code)
+  }
+
+  entity user_role {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    user_id: bigint [FK → user_account.id]
+    role_id: bigint [FK → role.id]
+    created_at: timestamptz
+    == 约束
+    UNIQUE(user_id, role_id)
+  }
+
+  entity permission {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    code: varchar(64) [UNIQUE]
+    name: varchar(128)
+    created_at: timestamptz
+  }
+
+  entity role_permission {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    role_id: bigint [FK → role.id]
+    permission_id: bigint [FK → permission.id]
+    created_at: timestamptz
+    == 约束
+    UNIQUE(role_id, permission_id)
+  }
+
+  entity audit_log {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint
+    user_id: bigint
+    action: varchar(64)
+    resource_type: varchar(64)
+    resource_id: varchar(64)
+    ip: varchar(64)
+    ua: varchar(256)
+    result: varchar(32) {'SUCCESS','FAIL'}
+    detail: jsonb
+    created_at: timestamptz
+  }
+}
+
+' ========== 设备与接入 ==========
+package "设备与接入（Device & Ingestion）" {
+  entity device {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    device_sn: varchar(64)
+    name: varchar(128)
+    type: varchar(32) {'RSU','CAMERA','MMWAVE','OTHER'}
+    status: varchar(32) {'NEW','ACTIVE','OFFLINE','BANNED'}
+    lng: double
+    lat: double
+    geojson: jsonb
+    firmware_ver: varchar(64)
+    secret_key_hash: varchar(128)
+    last_seen_at: timestamptz
+    last_heartbeat_at: timestamptz
+    created_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, device_sn)
+  }
+
+  entity device_group {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    name: varchar(128)
+    parent_id: bigint [FK → device_group.id]
+    created_at: timestamptz
+  }
+
+  entity device_group_relation {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    group_id: bigint [FK → device_group.id]
+    device_id: bigint [FK → device.id]
+    created_at: timestamptz
+    == 约束
+    UNIQUE(group_id, device_id)
+  }
+
+  entity device_config {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    device_id: bigint [FK → device.id]
+    key: varchar(64)
+    value_json: jsonb
+    version: int
+    created_at: timestamptz
+    == 约束
+    UNIQUE(device_id, key, version)
+  }
+
+  entity device_heartbeat {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    device_id: bigint [FK → device.id]
+    status: varchar(32) {'OK','WARN','ERROR'}
+    metrics_json: jsonb
+    created_at: timestamptz
+  }
+
+  entity channel {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    name: varchar(128)
+    type: varchar(32) {'HTTP','MQTT','RABBITMQ','KAFKA','WEBHOOK','EMAIL'}
+    config: jsonb
+    enabled: boolean
+    created_at: timestamptz
+    updated_at: timestamptz
+  }
+
+  entity ingest_source {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    device_id: bigint [FK → device.id] (nullable)
+    channel_id: bigint [FK → channel.id] (nullable)
+    name: varchar(128)
+    signature_alg: varchar(16) {'SHA256'}
+    rate_limit_per_min: int
+    mapping_rules: jsonb
+    enabled: boolean
+    created_at: timestamptz
+  }
+}
+
+' ========== 事件、标准化与异常 ==========
+package "事件、标准化与异常" {
+  entity event {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    device_id: bigint [FK → device.id]
+    source_channel_id: bigint [FK → channel.id]
+    ingest_source_id: bigint [FK → ingest_source.id]
+    event_type: varchar(64) {'CONGESTION','PEDESTRIAN_RED_LIGHT','CONTRAFLOW','CONSTRUCTION','CUSTOM'}
+    payload_json: jsonb
+    severity_hint: int
+    lng: double
+    lat: double
+    occurred_at: timestamptz
+    received_at: timestamptz
+    dedup_key: varchar(128)
+    signature: varchar(128)
+    processing_status: varchar(32) {'NEW','RULED','DROPPED','ERROR'}
+    standardized: boolean
+    created_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, dedup_key)
+  }
+
+  entity event_attachment {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    event_id: bigint [FK → event.id]
+    uri: varchar(512)
+    type: varchar(64)
+    meta_json: jsonb
+    created_at: timestamptz
+  }
+
+  entity event_enriched {
+    == 字段
+    * event_id: bigint [PK, FK → event.id]
+    -- 
+    normalized_payload: jsonb
+    matched_geofence_id: bigint
+    in_fence: boolean
+    snapped_point: jsonb
+    quality_score: numeric(5,2)
+    extra: jsonb
+    updated_at: timestamptz
+  }
+
+  entity ingest_quality_log {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    event_id: bigint [FK → event.id]
+    checks: jsonb
+    issues: jsonb
+    level: varchar(16) {'INFO','WARN','ERROR'}
+    created_at: timestamptz
+  }
+
+  entity ingest_retry_queue {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    event_id: bigint [FK → event.id]
+    payload: jsonb
+    retry_after: timestamptz
+    attempt: int
+    reason: varchar(128)
+    created_at: timestamptz
+  }
+
+  entity dlq_event {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    original_event_id: bigint [FK → event.id] (nullable)
+    payload: jsonb
+    error: varchar(256)
+    created_at: timestamptz
+  }
+}
+
+' ========== 规则、模型与告警 ==========
+package "规则、模型与告警" {
+  entity rule {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    name: varchar(128)
+    expr_type: varchar(16) {'SPEL','MVEL','JS','SQL'}
+    expr_text: text
+    scope: varchar(16) {'GLOBAL','GROUP','DEVICE'}
+    scope_ref_id: bigint
+    geofence_type: varchar(16) {'NONE','CIRCLE','POLYGON','RECT'}
+    geofence_params_json: jsonb
+    priority: int
+    enabled: boolean
+    version: int
+    created_by: bigint
+    created_at: timestamptz
+    updated_at: timestamptz
+  }
+
+  entity rule_history {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    rule_id: bigint [FK → rule.id]
+    snapshot_json: jsonb
+    version: int
+    created_at: timestamptz
+    == 约束
+    UNIQUE(rule_id, version)
+  }
+
+  entity model_binding {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    rule_id: bigint [FK → rule.id]
+    model_name: varchar(128)
+    endpoint: varchar(256)
+    timeout_ms: int
+    enabled: boolean
+    created_at: timestamptz
+  }
+
+  entity model_inference_log {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    rule_id: bigint [FK → rule.id]
+    event_id: bigint [FK → event.id]
+    request: jsonb
+    response: jsonb
+    success: boolean
+    latency_ms: int
+    created_at: timestamptz
+  }
+
+  entity alert {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    event_id: bigint [FK → event.id]
+    rule_id: bigint [FK → rule.id]
+    title: varchar(256)
+    severity: varchar(16) {'INFO','MINOR','MAJOR','CRITICAL'}
+    status: varchar(16) {'OPEN','ACKED','RESOLVED','IGNORED'}
+    dedup_hash: varchar(128)
+    first_seen_at: timestamptz
+    last_seen_at: timestamptz
+    occur_count: int
+    assignee_user_id: bigint
+    created_at: timestamptz
+    updated_at: timestamptz
+  }
+
+  entity notification {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    alert_id: bigint [FK → alert.id]
+    channel: varchar(16) {'EMAIL','WEBHOOK','SMS'}
+    target: varchar(256)
+    payload: jsonb
+    status: varchar(16) {'PENDING','SENT','FAILED'}
+    sent_at: timestamptz
+    retry_count: int
+    created_at: timestamptz
+  }
+
+  entity alert_webhook_log {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    alert_id: bigint [FK → alert.id]
+    endpoint_id: bigint [FK → webhook_endpoint.id]
+    request_headers: jsonb
+    request_body: jsonb
+    response_status: int
+    response_body: text
+    signature_valid: boolean
+    attempt: int
+    created_at: timestamptz
+  }
+}
+
+' ========== 订阅与开放接口 ==========
+package "订阅与开放接口（Subscriptions）" {
+  entity subscription {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    name: varchar(128)
+    type: varchar(16) {'REST','WS','MQ','WEBHOOK'}
+    filter: jsonb
+    endpoint_id: bigint [FK → webhook_endpoint.id] (nullable)
+    mq_channel_id: bigint [FK → channel.id] (nullable)
+    enabled: boolean
+    created_at: timestamptz
+  }
+
+  entity webhook_endpoint {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    name: varchar(128)
+    url: varchar(512)
+    secret: varchar(128)
+    headers: jsonb
+    enabled: boolean
+    created_at: timestamptz
+  }
+
+  entity api_credential {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    name: varchar(128)
+    client_id: varchar(128)
+    client_secret_hash: varchar(128)
+    scopes: jsonb
+    quota_per_min: int
+    enabled: boolean
+    created_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, client_id)
+  }
+}
+
+' ========== 工单与处置 ==========
+package "工单与处置（Tickets）" {
+  entity ticket {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    alert_id: bigint [FK → alert.id]
+    code: varchar(64)
+    title: varchar(256)
+    desc_text: text
+    status: varchar(16) {'NEW','ASSIGNED','IN_PROGRESS','RESOLVED','CLOSED'}
+    sla_minutes: int
+    priority: int
+    assignee_user_id: bigint
+    created_by: bigint
+    created_at: timestamptz
+    updated_at: timestamptz
+    closed_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, code)
+  }
+
+  entity ticket_log {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    ticket_id: bigint [FK → ticket.id]
+    action: varchar(16) {'CREATE','ASSIGN','COMMENT','ATTACH','RESOLVE','CLOSE','REOPEN'}
+    actor_user_id: bigint
+    content: text
+    created_at: timestamptz
+  }
+
+  entity ticket_attachment {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    ticket_id: bigint [FK → ticket.id]
+    uri: varchar(512)
+    meta_json: jsonb
+    created_at: timestamptz
+  }
+}
+
+' ========== 统计 ==========
+package "统计与报表（Stats）" {
+  entity daily_stats_device {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    device_id: bigint [FK → device.id]
+    date: date
+    event_count: int
+    alert_count: int
+    uptime_ratio: numeric(5,4)
+    created_at: timestamptz
+    == 约束
+    UNIQUE(tenant_id, device_id, date)
+  }
+
+  entity daily_stats_alert {
+    == 字段
+    * id: bigserial [PK]
+    -- 
+    tenant_id: bigint [FK → tenant.id]
+    date: date
+    severity: varchar(16)
+    count: int
+    mean_ack_minutes: numeric(10,2)
+    mean_close_minutes: numeric(10,2)
+    == 约束
+    UNIQUE(tenant_id, date, severity)
+  }
+}
+
+' ========== 关系（Cardinality） ==========
+' RBAC
+tenant ||--o{ user_account : 拥有
+tenant ||--o{ role : 拥有
+user_account ||--o{ user_role : 关联
+role ||--o{ user_role : 关联
+role ||--o{ role_permission : 关联
+permission ||--o{ role_permission : 关联
+tenant ||--o{ audit_log : 产生
+
+' Device & Ingestion
+tenant ||--o{ device : 拥有
+tenant ||--o{ device_group : 拥有
+device_group ||--o{ device_group_relation : 包含
+device ||--o{ device_group_relation : 归属
+device ||--o{ device_config : 配置
+device ||--o{ device_heartbeat : 心跳
+tenant ||--o{ channel : 通道
+tenant ||--o{ ingest_source : 接入源
+device ||--o{ ingest_source : 可绑定
+channel ||--o{ ingest_source : 可绑定
+
+' Event & Quality
+tenant ||--o{ event : 事件
+device ||--o{ event : 上报
+channel ||--o{ event : 来源
+ingest_source ||--o{ event : 来源
+event ||--o{ event_attachment : 附件
+event ||--|| event_enriched : 扩展
+event ||--o{ ingest_quality_log : 质量
+tenant ||--o{ ingest_retry_queue : 重试
+event ||--o{ ingest_retry_queue : 关联
+tenant ||--o{ dlq_event : 死信
+event ||..o{ dlq_event : 原始(可空)
+
+' Rules & Alerts
+tenant ||--o{ rule : 规则
+rule ||--o{ rule_history : 版本
+rule ||--o{ model_binding : 绑定模型
+tenant ||--o{ model_inference_log : 推理日志
+rule ||--o{ model_inference_log : 对应规则
+event ||--o{ model_inference_log : 对应事件
+
+event ||--o{ alert : 触发
+rule ||--o{ alert : 命中
+tenant ||--o{ alert : 告警
+alert ||--o{ notification : 通知
+tenant ||--o{ alert_webhook_log : 分发日志
+alert ||--o{ alert_webhook_log : 回执
+webhook_endpoint ||--o{ alert_webhook_log : 目标
+
+' Subscriptions
+tenant ||--o{ subscription : 订阅
+webhook_endpoint ||..o{ subscription : endpoint(可空)
+channel ||..o{ subscription : mq_channel(可空)
+tenant ||--o{ webhook_endpoint : Webhook
+tenant ||--o{ api_credential : 凭据
+
+' Tickets
+tenant ||--o{ ticket : 工单
+alert ||--o{ ticket : 来源告警
+ticket ||--o{ ticket_log : 操作日志
+ticket ||--o{ ticket_attachment : 附件
+
+' Stats
+tenant ||--o{ daily_stats_device : 统计
+device ||--o{ daily_stats_device : 维度
+tenant ||--o{ daily_stats_alert : 统计
+
+@enduml

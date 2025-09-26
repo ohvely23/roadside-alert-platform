@@ -1,0 +1,101 @@
+@startuml RAP-Sequence-NO-RBAC
+title 路侧事件告警平台（RAP）— 主链路与异常分支（无 RBAC 版）
+
+skinparam defaultFontName Microsoft YaHei
+skinparam sequence {
+  ArrowColor #2E5AAC
+  LifeLineBorderColor #2E5AAC
+  LifeLineBackgroundColor #EEF6FF
+  ParticipantBorderColor #2E5AAC
+  ParticipantBackgroundColor #F7FAFF
+}
+
+participant 设备 as Dev
+participant "RAP API网关\n(Spring MVC)" as APIGW
+participant "签名与幂等过滤器" as Filter
+participant "标准化/质量评分（简化）" as Normalize
+participant "事件持久化\n(PostgreSQL)" as DB
+participant "规则引擎" as Rule
+participant "告警服务\n(去抖/合并)" as Alert
+participant "通知服务\n(Web/Email/SMS/Webhook)" as Notify
+participant "工单服务" as Ticket
+participant "统计聚合\n(批/即席)" as Stats
+participant "调度员/运维" as User
+
+== 设备注册与激活 ==
+Dev -> APIGW : POST /api/devices/register\n{sn, model, ...}
+APIGW -> DB : insert device(status=REGISTERED, secret_hash)
+APIGW --> Dev : 201 Created + activationKey(仅显示一次)
+
+Dev -> APIGW : POST /api/devices/activate\nHeaders: SN/Timestamp/Nonce/Signature\nBody: {activationKey}
+APIGW -> Filter : 校验签名/时间窗/nonce
+Filter --> APIGW : OK
+APIGW -> DB : update device status=ACTIVE
+note right: 失败则 401/403 + 记录审计
+
+== 心跳保活（每60秒） ==
+loop 每60秒
+  Dev -> APIGW : POST /api/devices/{sn}/heartbeat\nHeaders: SN/Timestamp/Nonce/Signature\nBody: {deviceTime, metrics}
+  APIGW -> Filter : 校验签名、限流
+  Filter --> APIGW : OK
+  APIGW -> DB : insert device_heartbeat\nupdate device.last_heartbeat_at
+end
+
+== 事件上报 → 标准化 → 规则评估 ==
+Dev -> APIGW : POST /api/ingest/events\nHeaders: SN/Timestamp/Nonce/Signature\nBody: 事件JSON
+APIGW -> Filter : 校验签名、时间窗、幂等键
+Filter --> APIGW : OK or DUPLICATE
+alt 幂等命中（重复事件）
+  APIGW --> Dev : 200 OK {eventId, duplicated:true}
+else 新事件
+  APIGW -> Normalize : 标准化与质量评分（简化）
+  Normalize --> APIGW : 标准化事件
+  APIGW -> DB : insert event(dedup_key 唯一)
+  ' 同步调用规则链路（无 MQ）
+  APIGW -> Rule : evaluate(event)
+  Rule -> DB : 查询OPEN告警 within 窗口(默认300s)
+  alt 找到可合并告警
+    Rule -> Alert : occur_count++，更新 last_seen_at
+    Alert -> DB : update alert
+  else 无可合并
+    Rule -> Alert : 新建告警(status=OPEN, first_seen_at=now)
+    Alert -> DB : insert alert(dedup_hash 唯一)
+  end
+  APIGW --> Dev : 201 Created {eventId}
+end
+
+== 通知（同步触发） ==
+Alert -> Notify : dispatch(alert)\n(Web/Webhook/Email/SMS)
+alt 通知成功
+  Notify -> DB : update notification status=SENT, attempt++
+else 通知失败（可重试）
+  Notify -> DB : status=FAILED, attempt++, last_error\n（选做：后台任务重试）
+end
+
+== 可选：自动建单 ==
+opt 告警需自动建单
+  Alert -> Ticket : create ticket from alert
+  Ticket -> DB : insert ticket(status=NEW)
+end
+
+== 工单流转 ==
+User -> Ticket : 指派/处理/关闭操作
+Ticket -> DB : update ticket(status迁移)\ninsert ticket_log
+
+== 统计聚合 ==
+Stats -> DB : 周期性聚合\n事件/告警/在线率/工单
+DB --> User : 仪表盘/报表查询
+
+== 异常分支 ==
+group 签名/幂等校验失败
+  APIGW -> Dev : 401/403
+  APIGW -> DB : insert audit_log(action='AUTH_FAIL', detail...)
+end
+group 规则执行异常（简化处理）
+  APIGW -> Rule : evaluate(event)
+  Rule --> APIGW : throw Exception
+  APIGW -> DB : insert audit_log(action='RULE_ERROR', eventId, detail)
+  APIGW -> Notify : 通知运维（可选）
+end
+
+@enduml
